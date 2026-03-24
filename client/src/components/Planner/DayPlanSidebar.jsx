@@ -444,7 +444,7 @@ export default function DayPlanSidebar({
             <div key={day.id} style={{ borderBottom: '1px solid var(--border-faint)' }}>
               {/* Tages-Header — akzeptiert Drops aus der PlacesSidebar */}
               <div
-                onClick={() => { onSelectDay(isSelected ? null : day.id); if (onDayDetail) onDayDetail(isSelected ? null : day) }}
+                onClick={() => { onSelectDay(day.id); if (onDayDetail) onDayDetail(day) }}
                 onDragOver={e => { e.preventDefault(); setDragOverDayId(day.id) }}
                 onDragLeave={e => { if (!e.currentTarget.contains(e.relatedTarget)) setDragOverDayId(null) }}
                 onDrop={e => handleDropOnDay(e, day.id)}
