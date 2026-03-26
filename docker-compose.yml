@@ -1,6 +1,6 @@
 services:
   app:
-    image: mauriceboe/nomad:2.5.5
+    image: ghcr.io/denysvitali/nomad:latest
     container_name: nomad
     ports:
       - "3000:3000"
