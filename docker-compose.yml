@@ -1,6 +1,6 @@
 services:
   app:
-    image: ghcr.io/denysvitali/nomad:latest
+    image: ${NOMAD_IMAGE:-ghcr.io/denysvitali/nomad:master}
     container_name: nomad
     ports:
       - "3000:3000"
