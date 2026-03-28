@@ -20,6 +20,10 @@ function initDb() {
   }
 
   _db = new Database(dbPath);
+
+  // Restrict DB file permissions to owner-only (rw-------)
+  try { fs.chmodSync(dbPath, 0o600); } catch {}
+
   _db.exec('PRAGMA journal_mode = WAL');
   _db.exec('PRAGMA busy_timeout = 5000');
   _db.exec('PRAGMA foreign_keys = ON');
@@ -39,6 +43,7 @@ function initDb() {
       oidc_sub TEXT,
       oidc_issuer TEXT,
       last_login DATETIME,
+      is_demo INTEGER DEFAULT 0,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
@@ -364,7 +369,16 @@ function initDb() {
     CREATE INDEX IF NOT EXISTS idx_collab_notes_trip ON collab_notes(trip_id);
     CREATE INDEX IF NOT EXISTS idx_collab_polls_trip ON collab_polls(trip_id);
     CREATE INDEX IF NOT EXISTS idx_collab_messages_trip ON collab_messages(trip_id);
+
+    CREATE TABLE IF NOT EXISTS revoked_tokens (
+      jti TEXT PRIMARY KEY,
+      revoked_at TEXT DEFAULT (datetime('now')),
+      expires_at TEXT NOT NULL
+    );
   `);
+
+  // Purge any expired revoked tokens on startup
+  _db.prepare("DELETE FROM revoked_tokens WHERE expires_at < datetime('now')").run();
 
   // Create indexes for performance
   _db.exec(`
@@ -606,6 +620,10 @@ function initDb() {
       try { _db.exec('ALTER TABLE trip_files ADD COLUMN note_id INTEGER REFERENCES collab_notes(id) ON DELETE SET NULL'); } catch {}
       try { _db.exec('ALTER TABLE collab_notes ADD COLUMN website TEXT'); } catch {}
     },
+    // 31: Add is_demo flag to users
+    () => {
+      try { _db.exec('ALTER TABLE users ADD COLUMN is_demo INTEGER DEFAULT 0'); } catch {}
+    },
     // Future migrations go here (append only, never reorder)
   ];
 
@@ -670,6 +688,10 @@ if (process.env.DEMO_MODE === 'true') {
   try {
     const { seedDemoData } = require('../demo/demo-seed');
     seedDemoData(_db);
+    // Ensure the demo user is marked with is_demo = 1
+    try {
+      _db.prepare("UPDATE users SET is_demo = 1 WHERE email = 'demo@nomad.app'").run();
+    } catch {}
   } catch (err) {
     console.error('[Demo] Seed error:', err.message);
   }

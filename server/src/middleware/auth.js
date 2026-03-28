@@ -11,9 +11,16 @@ const authenticate = (req, res, next) => {
   }
 
   try {
-    const decoded = jwt.verify(token, JWT_SECRET);
+    const decoded = jwt.verify(token, JWT_SECRET, { algorithms: ['HS256'] });
+
+    // Check token revocation list
+    if (decoded.jti) {
+      const revoked = db.prepare('SELECT 1 FROM revoked_tokens WHERE jti = ?').get(decoded.jti);
+      if (revoked) return res.status(401).json({ error: 'Token has been revoked' });
+    }
+
     const user = db.prepare(
-      'SELECT id, username, email, role, maps_api_key, unsplash_api_key, openweather_api_key FROM users WHERE id = ?'
+      'SELECT id, username, email, role, is_demo FROM users WHERE id = ?'
     ).get(decoded.id);
     if (!user) {
       return res.status(401).json({ error: 'User not found' });
@@ -35,9 +42,19 @@ const optionalAuth = (req, res, next) => {
   }
 
   try {
-    const decoded = jwt.verify(token, JWT_SECRET);
+    const decoded = jwt.verify(token, JWT_SECRET, { algorithms: ['HS256'] });
+
+    // Check token revocation list
+    if (decoded.jti) {
+      const revoked = db.prepare('SELECT 1 FROM revoked_tokens WHERE jti = ?').get(decoded.jti);
+      if (revoked) {
+        req.user = null;
+        return next();
+      }
+    }
+
     const user = db.prepare(
-      'SELECT id, username, email, role, maps_api_key, unsplash_api_key, openweather_api_key FROM users WHERE id = ?'
+      'SELECT id, username, email, role, is_demo FROM users WHERE id = ?'
     ).get(decoded.id);
     req.user = user || null;
   } catch (err) {
@@ -54,7 +71,7 @@ const adminOnly = (req, res, next) => {
 };
 
 const demoUploadBlock = (req, res, next) => {
-  if (process.env.DEMO_MODE === 'true' && req.user?.email === 'demo@nomad.app') {
+  if (process.env.DEMO_MODE === 'true' && req.user?.is_demo === 1) {
     return res.status(403).json({ error: 'Uploads are disabled in demo mode. Self-host NOMAD for full functionality.' });
   }
   next();
