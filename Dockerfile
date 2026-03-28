@@ -26,8 +26,13 @@ COPY --from=client-builder /app/client/dist ./public
 # Fonts für PDF-Export kopieren
 COPY --from=client-builder /app/client/public/fonts ./public/fonts
 
-# Verzeichnisse erstellen
-RUN mkdir -p /app/data /app/uploads/files /app/uploads/covers
+# Verzeichnisse erstellen und Berechtigungen setzen
+RUN mkdir -p /app/data /app/uploads/files /app/uploads/covers /app/uploads/photos /app/uploads/avatars && \
+    addgroup -S nomad && adduser -S nomad -G nomad && \
+    chown -R nomad:nomad /app
+
+# Als non-root Benutzer ausführen
+USER nomad
 
 # Umgebung setzen
 ENV NODE_ENV=production

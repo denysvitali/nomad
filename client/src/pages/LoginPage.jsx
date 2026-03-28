@@ -29,18 +29,30 @@ export default function LoginPage() {
       }
     })
 
-    // Handle OIDC callback token (via URL fragment to avoid logging)
-    const hash = window.location.hash.substring(1)
-    const hashParams = new URLSearchParams(hash)
-    const token = hashParams.get('token')
+    // Handle OIDC callback: exchange the one-time code for a JWT via POST.
+    // Using a server-side code avoids embedding the token in browser history or
+    // server access logs (which the previous #fragment approach risked).
     const params = new URLSearchParams(window.location.search)
+    const oidcCode = params.get('oidc_code')
     const oidcError = params.get('oidc_error')
-    if (token) {
-      localStorage.setItem('auth_token', token)
+    if (oidcCode) {
       window.history.replaceState({}, '', '/login')
-      login.__fromOidc = true
-      navigate('/dashboard')
-      window.location.reload()
+      fetch('/api/auth/oidc/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code: oidcCode }),
+      })
+        .then(r => r.json())
+        .then(data => {
+          if (data.token) {
+            localStorage.setItem('auth_token', data.token)
+            navigate('/dashboard')
+            window.location.reload()
+          } else {
+            setError(data.error || t('login.oidc.tokenFailed'))
+          }
+        })
+        .catch(() => setError(t('login.oidc.tokenFailed')))
     }
     if (oidcError) {
       const errorMessages = {

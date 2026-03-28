@@ -82,8 +82,6 @@ router.get('/app-config', (req, res) => {
     oidc_display_name: oidcConfigured ? (oidcDisplayName || 'SSO') : undefined,
     allowed_file_types: db.prepare("SELECT value FROM app_settings WHERE key = 'allowed_file_types'").get()?.value || 'jpg,jpeg,png,gif,webp,heic,pdf,doc,docx,xls,xlsx,txt,csv',
     demo_mode: isDemo,
-    demo_email: isDemo ? 'demo@nomad.app' : undefined,
-    demo_password: isDemo ? 'demo12345' : undefined,
   });
 });
 

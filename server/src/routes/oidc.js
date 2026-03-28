@@ -11,11 +11,19 @@ const router = express.Router();
 const pendingStates = new Map();
 const STATE_TTL = 5 * 60 * 1000; // 5 minutes
 
-// Cleanup expired states periodically
+// In-memory one-time code store for safe token handoff (code → { token, createdAt })
+// Avoids embedding JWTs in URL fragments (browser history / server log exposure).
+const pendingTokens = new Map();
+const TOKEN_CODE_TTL = 2 * 60 * 1000; // 2 minutes
+
+// Cleanup expired entries periodically
 setInterval(() => {
   const now = Date.now();
   for (const [state, data] of pendingStates) {
     if (now - data.createdAt > STATE_TTL) pendingStates.delete(state);
+  }
+  for (const [code, data] of pendingTokens) {
+    if (now - data.createdAt > TOKEN_CODE_TTL) pendingTokens.delete(code);
   }
 }, 60 * 1000);
 
@@ -193,14 +201,36 @@ router.get('/callback', async (req, res) => {
     // Update last login
     db.prepare('UPDATE users SET last_login = CURRENT_TIMESTAMP WHERE id = ?').run(user.id);
 
-    // Generate JWT and redirect to frontend
-    const token = generateToken(user);
-    // In dev mode, frontend runs on a different port
-    res.redirect(frontendUrl(`/login#token=${token}`));
+    // Issue a short-lived one-time code instead of embedding the JWT in the URL fragment.
+    // This prevents the token from appearing in browser history or server access logs.
+    const jwtToken = generateToken(user);
+    const handoffCode = crypto.randomBytes(32).toString('hex');
+    pendingTokens.set(handoffCode, { token: jwtToken, createdAt: Date.now() });
+
+    res.redirect(frontendUrl(`/login?oidc_code=${handoffCode}`));
   } catch (err) {
     console.error('[OIDC] Callback error:', err);
     res.redirect(frontendUrl('/login?oidc_error=server_error'));
   }
+});
+
+// POST /api/auth/oidc/token — exchange one-time code for JWT
+// The frontend calls this immediately after receiving the oidc_code query param.
+router.post('/token', (req, res) => {
+  const { code } = req.body;
+  if (!code) return res.status(400).json({ error: 'Code is required' });
+
+  const entry = pendingTokens.get(code);
+  if (!entry) return res.status(400).json({ error: 'Invalid or expired code' });
+
+  // Enforce TTL and single-use
+  if (Date.now() - entry.createdAt > TOKEN_CODE_TTL) {
+    pendingTokens.delete(code);
+    return res.status(400).json({ error: 'Code has expired' });
+  }
+
+  pendingTokens.delete(code);
+  res.json({ token: entry.token });
 });
 
 module.exports = router;

@@ -7,6 +7,13 @@ const fs = require('fs');
 
 const app = express();
 
+// Trust the first proxy hop (e.g. nginx / Traefik) so req.ip reflects the
+// real client address, which the rate limiter relies on.
+// Set TRUST_PROXY=false to disable if not running behind a reverse proxy.
+if (process.env.TRUST_PROXY !== 'false') {
+  app.set('trust proxy', 1);
+}
+
 // Create upload directories on startup
 const uploadsDir = path.join(__dirname, '../uploads');
 const photosDir = path.join(uploadsDir, 'photos');
@@ -44,7 +51,23 @@ app.use(cors({
   credentials: true
 }));
 app.use(helmet({
-  contentSecurityPolicy: false,   // managed by frontend meta tag or reverse proxy
+  // CSP is intentionally permissive because the app loads external tile servers
+  // (OpenStreetMap, Google Maps), weather/unsplash images, and WebSocket.
+  // A tighter policy can be applied at the reverse-proxy layer.
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'", "'unsafe-inline'"],  // React build uses inline scripts
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      imgSrc: ["'self'", 'data:', 'blob:', 'https:'],
+      connectSrc: ["'self'", 'wss:', 'ws:', 'https:'],
+      fontSrc: ["'self'", 'data:'],
+      objectSrc: ["'none'"],
+      frameSrc: ["'none'"],
+      baseUri: ["'self'"],
+      formAction: ["'self'"],
+    },
+  },
   crossOriginEmbedderPolicy: false, // allows loading external images (maps, etc.)
 }));
 app.use(express.json({ limit: '100kb' }));
