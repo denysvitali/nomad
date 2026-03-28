@@ -5,12 +5,15 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const { v4: uuid } = require('uuid');
+const { v4: uuidv4 } = require('uuid');
 const fetch = require('node-fetch');
 const { db } = require('../db/database');
 const { authenticate, demoUploadBlock } = require('../middleware/auth');
 
 const router = express.Router();
 const { JWT_SECRET } = require('../config');
+
+const BCRYPT_ROUNDS = 12;
 
 const avatarDir = path.join(__dirname, '../../uploads/avatars');
 if (!fs.existsSync(avatarDir)) fs.mkdirSync(avatarDir, { recursive: true });
@@ -27,6 +30,8 @@ const avatarUpload = multer({ storage: avatarStorage, limits: { fileSize: 5 * 10
   }
   cb(null, true);
 }});
+
+const SAFE_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.csv', '.txt', '.zip', '.mp4', '.mp3', '.wav', '.ogg', '.mov', '.avi'];
 
 // Simple rate limiter
 const loginAttempts = new Map();
@@ -52,9 +57,15 @@ function avatarUrl(user) {
   return user.avatar ? `/uploads/avatars/${user.avatar}` : null;
 }
 
+function maskApiKey(key) {
+  if (!key) return null;
+  if (key.length <= 8) return '****';
+  return key.substring(0, 4) + '****' + key.substring(key.length - 4);
+}
+
 function generateToken(user) {
   return jwt.sign(
-    { id: user.id, username: user.username, email: user.email, role: user.role },
+    { id: user.id, username: user.username, email: user.email, role: user.role, jti: uuidv4() },
     JWT_SECRET,
     { expiresIn: '24h' }
   );
@@ -128,7 +139,7 @@ router.post('/register', authLimiter, (req, res) => {
     return res.status(409).json({ error: 'A user with this email or username already exists' });
   }
 
-  const password_hash = bcrypt.hashSync(password, 10);
+  const password_hash = bcrypt.hashSync(password, BCRYPT_ROUNDS);
 
   // First user becomes admin
   const isFirstUser = userCount === 0;
@@ -144,7 +155,8 @@ router.post('/register', authLimiter, (req, res) => {
 
     res.status(201).json({ token, user: { ...user, avatar_url: null } });
   } catch (err) {
-    res.status(500).json({ error: 'Error creating user' });
+    console.error('Operation failed:', err);
+    res.status(500).json({ error: 'An internal error occurred' });
   }
 });
 
@@ -173,6 +185,21 @@ router.post('/login', authLimiter, (req, res) => {
   res.json({ token, user: { ...userWithoutSensitive, avatar_url: avatarUrl(user) } });
 });
 
+// POST /api/auth/logout
+router.post('/logout', authenticate, (req, res) => {
+  try {
+    const token = req.headers.authorization?.split(' ')[1];
+    const decoded = jwt.decode(token);
+    if (decoded?.jti && decoded?.exp) {
+      const expiresAt = new Date(decoded.exp * 1000).toISOString();
+      db.prepare('INSERT OR IGNORE INTO revoked_tokens (jti, expires_at) VALUES (?, ?)').run(decoded.jti, expiresAt);
+    }
+    res.json({ success: true });
+  } catch {
+    res.json({ success: true });
+  }
+});
+
 // GET /api/auth/me
 router.get('/me', authenticate, (req, res) => {
   const user = db.prepare(
@@ -188,14 +215,21 @@ router.get('/me', authenticate, (req, res) => {
 
 // PUT /api/auth/me/password
 router.put('/me/password', authenticate, (req, res) => {
-  if (process.env.DEMO_MODE === 'true' && req.user.email === 'demo@nomad.app') {
+  if (process.env.DEMO_MODE === 'true' && req.user?.is_demo === 1) {
     return res.status(403).json({ error: 'Password change is disabled in demo mode.' });
   }
-  const { new_password } = req.body;
-  if (!new_password) return res.status(400).json({ error: 'New password is required' });
+  const { current_password, new_password } = req.body;
+  if (!current_password || !new_password) {
+    return res.status(400).json({ error: 'Current password and new password are required' });
+  }
   if (new_password.length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters' });
 
-  const hash = bcrypt.hashSync(new_password, 10);
+  const user = db.prepare('SELECT password_hash FROM users WHERE id = ?').get(req.user.id);
+  if (!bcrypt.compareSync(current_password, user.password_hash)) {
+    return res.status(401).json({ error: 'Current password is incorrect' });
+  }
+
+  const hash = bcrypt.hashSync(new_password, BCRYPT_ROUNDS);
   db.prepare('UPDATE users SET password_hash = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(hash, req.user.id);
   res.json({ success: true });
 });
@@ -203,7 +237,7 @@ router.put('/me/password', authenticate, (req, res) => {
 // DELETE /api/auth/me — delete own account
 router.delete('/me', authenticate, (req, res) => {
   // Block demo user
-  if (process.env.DEMO_MODE === 'true' && req.user.email === 'demo@nomad.app') {
+  if (process.env.DEMO_MODE === 'true' && req.user?.is_demo === 1) {
     return res.status(403).json({ error: 'Account deletion is disabled in demo mode.' });
   }
   // Prevent deleting last admin
@@ -225,18 +259,20 @@ router.put('/me/maps-key', authenticate, (req, res) => {
     'UPDATE users SET maps_api_key = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?'
   ).run(maps_api_key || null, req.user.id);
 
-  res.json({ success: true, maps_api_key: maps_api_key || null });
+  res.json({ success: true, maps_api_key: maskApiKey(maps_api_key || null) });
 });
 
 // PUT /api/auth/me/api-keys
 router.put('/me/api-keys', authenticate, (req, res) => {
   const { maps_api_key, openweather_api_key } = req.body;
 
+  const userKeys = db.prepare('SELECT maps_api_key, openweather_api_key FROM users WHERE id = ?').get(req.user.id);
+
   db.prepare(
     'UPDATE users SET maps_api_key = ?, openweather_api_key = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?'
   ).run(
-    maps_api_key !== undefined ? (maps_api_key || null) : req.user.maps_api_key,
-    openweather_api_key !== undefined ? (openweather_api_key || null) : req.user.openweather_api_key,
+    maps_api_key !== undefined ? (maps_api_key || null) : userKeys.maps_api_key,
+    openweather_api_key !== undefined ? (openweather_api_key || null) : userKeys.openweather_api_key,
     req.user.id
   );
 
@@ -244,7 +280,7 @@ router.put('/me/api-keys', authenticate, (req, res) => {
     'SELECT id, username, email, role, maps_api_key, openweather_api_key, avatar FROM users WHERE id = ?'
   ).get(req.user.id);
 
-  res.json({ success: true, user: { ...updated, avatar_url: avatarUrl(updated) } });
+  res.json({ success: true, user: { ...updated, maps_api_key: maskApiKey(updated.maps_api_key), openweather_api_key: maskApiKey(updated.openweather_api_key), avatar_url: avatarUrl(updated) } });
 });
 
 // PUT /api/auth/me/settings
@@ -269,17 +305,18 @@ router.put('/me/settings', authenticate, (req, res) => {
     'SELECT id, username, email, role, maps_api_key, openweather_api_key, avatar FROM users WHERE id = ?'
   ).get(req.user.id);
 
-  res.json({ success: true, user: { ...updated, avatar_url: avatarUrl(updated) } });
+  res.json({ success: true, user: { ...updated, maps_api_key: maskApiKey(updated.maps_api_key), openweather_api_key: maskApiKey(updated.openweather_api_key), avatar_url: avatarUrl(updated) } });
 });
 
 // GET /api/auth/me/settings (admin only — returns API keys)
 router.get('/me/settings', authenticate, (req, res) => {
   const user = db.prepare(
-    'SELECT role, maps_api_key, openweather_api_key FROM users WHERE id = ?'
+    'SELECT role FROM users WHERE id = ?'
   ).get(req.user.id);
   if (user?.role !== 'admin') return res.status(403).json({ error: 'Admin access required' });
 
-  res.json({ settings: { maps_api_key: user.maps_api_key, openweather_api_key: user.openweather_api_key } });
+  const userKeys = db.prepare('SELECT maps_api_key, openweather_api_key, unsplash_api_key FROM users WHERE id = ?').get(req.user.id);
+  res.json({ settings: { maps_api_key: maskApiKey(userKeys.maps_api_key), openweather_api_key: maskApiKey(userKeys.openweather_api_key), unsplash_api_key: maskApiKey(userKeys.unsplash_api_key) } });
 });
 
 // POST /api/auth/avatar — upload avatar
@@ -372,6 +409,14 @@ router.put('/app-settings', authenticate, (req, res) => {
     db.prepare("INSERT OR REPLACE INTO app_settings (key, value) VALUES ('allow_registration', ?)").run(String(allow_registration));
   }
   if (allowed_file_types !== undefined) {
+    const types = allowed_file_types.split(',').map(t => t.trim().toLowerCase());
+    if (types.includes('*')) {
+      return res.status(400).json({ error: 'Wildcard (*) is not allowed for file types' });
+    }
+    const invalid = types.filter(t => !SAFE_EXTENSIONS.includes(t.startsWith('.') ? t : '.' + t));
+    if (invalid.length > 0) {
+      return res.status(400).json({ error: `Invalid file types: ${invalid.join(', ')}` });
+    }
     db.prepare("INSERT OR REPLACE INTO app_settings (key, value) VALUES ('allowed_file_types', ?)").run(String(allowed_file_types));
   }
   res.json({ success: true });
