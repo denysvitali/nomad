@@ -6,14 +6,14 @@ const path = require('path');
 const fs = require('fs');
 
 // Sentry error tracking (optional - set SENTRY_DSN env var at runtime)
-let sentryClient;
+let captureException;
 if (process.env.SENTRY_DSN) {
   const Sentry = require('@sentry/node');
   Sentry.init({
     dsn: process.env.SENTRY_DSN,
     environment: process.env.NODE_ENV || 'development',
   });
-  sentryClient = Sentry;
+  captureException = Sentry.captureException.bind(Sentry);
 }
 
 const app = express();
@@ -96,9 +96,10 @@ app.use('/uploads', (req, res, next) => {
 }, express.static(path.join(__dirname, '../uploads')));
 
 // Sentry request handler and tracing middleware (must be before routes)
-if (sentryClient) {
-  app.use(sentryClient.Handlers.requestHandler());
-  app.use(sentryClient.Handlers.tracingHandler());
+if (process.env.SENTRY_DSN) {
+  const { requestHandler, tracingHandler } = require('@sentry/node');
+  app.use(requestHandler());
+  app.use(tracingHandler());
 }
 
 // Routes
@@ -175,8 +176,8 @@ if (process.env.NODE_ENV === 'production') {
 
 // Global error handler (must be after routes)
 app.use((err, req, res, next) => {
-  if (sentryClient) {
-    sentryClient.captureException(err);
+  if (captureException) {
+    captureException(err);
   }
   console.error('Unhandled error:', err);
   res.status(500).json({ error: 'Internal server error' });
