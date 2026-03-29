@@ -1,7 +1,7 @@
 const { WebSocketServer } = require('ws');
 const jwt = require('jsonwebtoken');
 const { JWT_SECRET } = require('./config');
-const { db, canAccessTrip } = require('./db/database');
+const { db, canAccessTrip, validateTripSession } = require('./db/database');
 
 // Room management: tripId → Set<WebSocket>
 const rooms = new Map();
@@ -29,6 +29,9 @@ const MAX_ROOMS_PER_SOCKET = 10;
 
 // Token expiry tracking per socket
 const socketExpiry = new WeakMap();
+
+// Guest session tracking: socket -> { tripId, sessionId }
+const socketGuestSession = new WeakMap();
 
 let wss;
 
@@ -92,6 +95,30 @@ function setupWebSocket(server) {
 
       // Handle unauthenticated state — expect auth message first
       if (!authenticated) {
+        // Guest authentication via session token
+        if (msg.type === 'auth_guest' && msg.token) {
+          const session = validateTripSession(msg.token, msg.password);
+          if (!session) {
+            ws.send(JSON.stringify({ type: 'error', message: 'Invalid session' }));
+            ws.close(4001, 'Invalid session');
+            return;
+          }
+
+          authenticated = true;
+          ws.isGuest = true;
+          clearTimeout(authTimeout);
+
+          const sid = nextSocketId++;
+          socketId.set(ws, sid);
+          socketRooms.set(ws, new Set());
+          socketGuestSession.set(ws, { tripId: session.trip_id, sessionId: session.id });
+
+          ws.send(JSON.stringify({ type: 'authenticated' }));
+          ws.send(JSON.stringify({ type: 'welcome', socketId: sid }));
+          return;
+        }
+
+        // Regular JWT authentication
         if (msg.type !== 'auth' || !msg.token) {
           ws.close(4001, 'Authentication required');
           return;
@@ -145,6 +172,15 @@ function setupWebSocket(server) {
         return;
       }
 
+      // Guest message type restrictions — guests can only interact with collab features
+      if (ws.isGuest) {
+        const allowedGuestTypes = ['collab:message', 'collab:react', 'collab:vote', 'join', 'leave'];
+        if (!allowedGuestTypes.includes(msg.type)) {
+          ws.send(JSON.stringify({ type: 'error', message: 'Guests cannot perform this action' }));
+          return;
+        }
+      }
+
       if (msg.type === 'join' && msg.tripId) {
         const tripId = parseInt(msg.tripId, 10);
         if (!Number.isFinite(tripId) || tripId <= 0) return;
@@ -156,10 +192,19 @@ function setupWebSocket(server) {
           return;
         }
 
-        // Verify the user has access to this trip
-        if (!canAccessTrip(tripId, userId)) {
-          ws.send(JSON.stringify({ type: 'error', message: 'Access denied' }));
-          return;
+        // For guests, only allow joining the trip associated with their session
+        if (ws.isGuest) {
+          const guestSession = socketGuestSession.get(ws);
+          if (!guestSession || guestSession.tripId !== tripId) {
+            ws.send(JSON.stringify({ type: 'error', message: 'Access denied' }));
+            return;
+          }
+        } else {
+          // Verify the user has access to this trip
+          if (!canAccessTrip(tripId, userId)) {
+            ws.send(JSON.stringify({ type: 'error', message: 'Access denied' }));
+            return;
+          }
         }
         // Add to room
         if (!rooms.has(tripId)) rooms.set(tripId, new Set());

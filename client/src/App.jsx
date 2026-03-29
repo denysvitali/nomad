@@ -6,6 +6,7 @@ import LoginPage from './pages/LoginPage'
 import RegisterPage from './pages/RegisterPage'
 import DashboardPage from './pages/DashboardPage'
 import TripPlannerPage from './pages/TripPlannerPage'
+import TripLivePage from './pages/TripLivePage'
 import CompanionPage from './pages/CompanionPage'
 // PhotosPage removed - replaced by Finanzplan
 import FilesPage from './pages/FilesPage'
@@ -201,6 +202,7 @@ export default function App() {
             </ProtectedRoute>
           }
         />
+        <Route path="/trip/:id/live" element={<TripLivePage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
       <BriefingsPanel pendingBriefings={pendingBriefings} onDismiss={handleDismissBriefing} />

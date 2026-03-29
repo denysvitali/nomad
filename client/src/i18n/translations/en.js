@@ -1035,6 +1035,31 @@ const en = {
   'collab.polls.options': 'Options',
   'collab.polls.delete': 'Delete',
   'collab.polls.closedSection': 'Closed',
+
+  // Briefing
+  'dreamTrip.title': 'Dream Trip Generator',
+  'dreamTrip.promptPlaceholder': 'Describe your dream trip... e.g. "A romantic weekend in Paris with good food and wine"',
+  'dreamTrip.generate': 'Generate',
+  'dreamTrip.generating': 'Generating your dream trip...',
+  'dreamTrip.noResults': 'No results found. Try a different prompt.',
+  'dreamTrip.selectedCount': '{count} places selected',
+  'dreamTrip.acceptSelected': 'Accept {count} Places',
+  'dreamTrip.discard': 'Discard',
+  'dreamTrip.errors.emptyPrompt': 'Please describe your dream trip',
+  'dreamTrip.errors.noKey': 'Anthropic API key not configured. Add it in Admin settings.',
+  'dreamTrip.errors.generationFailed': 'Failed to generate trip plan',
+  'dreamTrip.errors.acceptFailed': 'Failed to accept selections',
+  'dreamTrip.toast.accepted': '{count} places added to your trip!',
+
+  'briefing.title': 'Your Trip Briefings',
+  'briefing.ready': 'Your briefing for "{trip}" is ready!',
+  'briefing.view': 'View',
+  'briefing.flights': '{count} flights',
+  'briefing.hotels': '{count} hotels',
+  'briefing.generated': 'Generated {time}',
+  'briefing.noBriefings': 'No pending briefings',
+  'briefing.daysLeft': '{count} days until departure',
+  'briefing.tomorrow': 'Tomorrow!',
 }
 
 export default en

@@ -70,6 +70,10 @@ export const tripsApi = {
   getMembers: (id) => apiClient.get(`/trips/${id}/members`).then(r => r.data),
   addMember: (id, identifier) => apiClient.post(`/trips/${id}/members`, { identifier }).then(r => r.data),
   removeMember: (id, userId) => apiClient.delete(`/trips/${id}/members/${userId}`).then(r => r.data),
+  // Shareable sessions
+  createShareSession: (id, data) => apiClient.post(`/trips/${id}/share`, data).then(r => r.data),
+  deleteShareSession: (id) => apiClient.delete(`/trips/${id}/share`).then(r => r.data),
+  getShareSessions: (id) => apiClient.get(`/trips/${id}/sessions`).then(r => r.data),
 }
 
 export const daysApi = {
@@ -226,6 +230,11 @@ export const collabApi = {
   deleteMessage: (tripId, id) => apiClient.delete(`/trips/${tripId}/collab/messages/${id}`).then(r => r.data),
   reactMessage: (tripId, id, emoji) => apiClient.post(`/trips/${tripId}/collab/messages/${id}/react`, { emoji }).then(r => r.data),
   linkPreview: (tripId, url) => apiClient.get(`/trips/${tripId}/collab/link-preview?url=${encodeURIComponent(url)}`).then(r => r.data),
+}
+
+export const aiApi = {
+  generate: (tripId, prompt) => apiClient.post(`/trips/${tripId}/ai/generate`, { prompt }).then(r => r.data),
+  accept: (tripId, selections) => apiClient.post(`/trips/${tripId}/ai/accept`, { selections }).then(r => r.data),
 }
 
 export const backupApi = {

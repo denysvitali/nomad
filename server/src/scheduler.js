@@ -17,6 +17,7 @@ const CRON_EXPRESSIONS = {
 
 const VALID_INTERVALS = Object.keys(CRON_EXPRESSIONS);
 
+let briefingTask = null;
 let currentTask = null;
 
 function loadSettings() {
@@ -123,6 +124,21 @@ function startDemoReset() {
 function stop() {
   if (currentTask) { currentTask.stop(); currentTask = null; }
   if (demoTask) { demoTask.stop(); demoTask = null; }
+  if (briefingTask) { briefingTask.stop(); briefingTask = null; }
 }
 
-module.exports = { start, stop, startDemoReset, loadSettings, saveSettings, VALID_INTERVALS };
+// Briefing job: runs hourly to send trip briefings 24h before departure
+function startBriefingJob() {
+  if (briefingTask) { briefingTask.stop(); briefingTask = null; }
+  briefingTask = cron.schedule('0 * * * *', async () => {
+    console.log('[Scheduler] Running briefing check...');
+    try {
+      await require('./jobs/briefing')();
+    } catch (err) {
+      console.error('[Scheduler] Briefing job error:', err);
+    }
+  });
+  console.log('[Briefing] Hourly briefing job scheduled (at :00 every hour)');
+}
+
+module.exports = { start, stop, startBriefingJob, startDemoReset, loadSettings, saveSettings, VALID_INTERVALS };

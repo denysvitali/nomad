@@ -12,6 +12,7 @@ import PlaceFormModal from '../components/Planner/PlaceFormModal'
 import TripFormModal from '../components/Trips/TripFormModal'
 import TripMembersModal from '../components/Trips/TripMembersModal'
 import { ReservationModal } from '../components/Planner/ReservationModal'
+import DreamTripModal from '../components/Planner/DreamTripModal'
 import ReservationsPanel from '../components/Planner/ReservationsPanel'
 import PackingListPanel from '../components/Packing/PackingListPanel'
 import FileManager from '../components/Files/FileManager'
@@ -19,7 +20,7 @@ import BudgetPanel from '../components/Budget/BudgetPanel'
 import CollabPanel from '../components/Collab/CollabPanel'
 import Navbar from '../components/Layout/Navbar'
 import { useToast } from '../components/shared/Toast'
-import { Map, X, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Smartphone } from 'lucide-react'
+import { Map, X, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Sparkles } from 'lucide-react'
 import { useTranslation } from '../i18n'
 import { joinTrip, leaveTrip, addListener, removeListener } from '../api/websocket'
 import { addonsApi, accommodationsApi, authApi, tripsApi, assignmentsApi } from '../api/client'
@@ -105,6 +106,7 @@ export default function TripPlannerPage() {
   const [showTripForm, setShowTripForm] = useState(false)
   const [showMembersModal, setShowMembersModal] = useState(false)
   const [showReservationModal, setShowReservationModal] = useState(false)
+  const [showDreamTrip, setShowDreamTrip] = useState(false)
   const [editingReservation, setEditingReservation] = useState(null)
   const [route, setRoute] = useState(null)
   const [routeInfo, setRouteInfo] = useState(null) // unused legacy
@@ -403,7 +405,7 @@ export default function TripPlannerPage() {
 
       <div style={{
         position: 'fixed', top: 'var(--nav-h)', left: 0, right: 0, zIndex: 40,
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        display: 'flex', alignItems: 'center',
         padding: '0 12px',
         background: 'var(--bg-elevated)',
         backdropFilter: 'blur(16px)',
@@ -413,28 +415,46 @@ export default function TripPlannerPage() {
         overflowX: 'auto', scrollbarWidth: 'none', msOverflowStyle: 'none',
         gap: 2,
       }}>
-        {TRIP_TABS.map(tab => {
-          const isActive = activeTab === tab.id
-          return (
-            <button
-              key={tab.id}
-              onClick={() => handleTabChange(tab.id)}
-              style={{
-                flexShrink: 0,
-                padding: '5px 14px', borderRadius: 20, border: 'none', cursor: 'pointer',
-                fontSize: 13, fontWeight: isActive ? 600 : 400,
-                background: isActive ? 'var(--accent)' : 'transparent',
-                color: isActive ? 'var(--accent-text)' : 'var(--text-muted)',
-                fontFamily: 'inherit', transition: 'all 0.15s',
-              }}
-              onMouseEnter={e => { if (!isActive) e.currentTarget.style.background = 'var(--bg-hover)'; e.currentTarget.style.color = isActive ? 'var(--accent-text)' : 'var(--text-primary)' }}
-              onMouseLeave={e => { if (!isActive) e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = isActive ? 'var(--accent-text)' : 'var(--text-muted)' }}
-            >{tab.shortLabel
-                ? <><span className="sm:hidden">{tab.shortLabel}</span><span className="hidden sm:inline">{tab.label}</span></>
-                : tab.label
-              }</button>
-          )
-        })}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 2, flex: 1, justifyContent: 'center' }}>
+          {TRIP_TABS.map(tab => {
+            const isActive = activeTab === tab.id
+            return (
+              <button
+                key={tab.id}
+                onClick={() => handleTabChange(tab.id)}
+                style={{
+                  flexShrink: 0,
+                  padding: '5px 14px', borderRadius: 20, border: 'none', cursor: 'pointer',
+                  fontSize: 13, fontWeight: isActive ? 600 : 400,
+                  background: isActive ? 'var(--accent)' : 'transparent',
+                  color: isActive ? 'var(--accent-text)' : 'var(--text-muted)',
+                  fontFamily: 'inherit', transition: 'all 0.15s',
+                }}
+                onMouseEnter={e => { if (!isActive) e.currentTarget.style.background = 'var(--bg-hover)'; e.currentTarget.style.color = isActive ? 'var(--accent-text)' : 'var(--text-primary)' }}
+                onMouseLeave={e => { if (!isActive) e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = isActive ? 'var(--accent-text)' : 'var(--text-muted)' }}
+              >{tab.shortLabel
+                  ? <><span className="sm:hidden">{tab.shortLabel}</span><span className="hidden sm:inline">{tab.label}</span></>
+                  : tab.label
+                }</button>
+            )
+          })}
+        </div>
+        <button
+          onClick={() => setShowDreamTrip(true)}
+          style={{
+            flexShrink: 0,
+            padding: '5px 12px', borderRadius: 20, border: 'none', cursor: 'pointer',
+            fontSize: 12, fontWeight: 500,
+            background: 'var(--accent)', color: 'var(--accent-text)',
+            fontFamily: 'inherit', transition: 'all 0.15s',
+            display: 'flex', alignItems: 'center', gap: 4,
+          }}
+          onMouseEnter={e => { e.currentTarget.style.opacity = '0.9' }}
+          onMouseLeave={e => { e.currentTarget.style.opacity = '1' }}
+        >
+          <Sparkles className="w-3.5 h-3.5" />
+          <span className="hidden sm:inline">Dream Trip</span>
+        </button>
       </div>
 
       {/* Offset by navbar + tab bar (44px) */}
@@ -729,6 +749,7 @@ export default function TripPlannerPage() {
       <TripFormModal isOpen={showTripForm} onClose={() => setShowTripForm(false)} onSave={async (data) => { await tripStore.updateTrip(tripId, data); toast.success(t('trip.toast.tripUpdated')) }} trip={trip} />
       <TripMembersModal isOpen={showMembersModal} onClose={() => setShowMembersModal(false)} tripId={tripId} tripTitle={trip?.title} />
       <ReservationModal isOpen={showReservationModal} onClose={() => { setShowReservationModal(false); setEditingReservation(null) }} onSave={handleSaveReservation} reservation={editingReservation} days={days} places={places} assignments={assignments} selectedDayId={selectedDayId} files={files} onFileUpload={(fd) => tripStore.addFile(tripId, fd)} onFileDelete={(id) => tripStore.deleteFile(tripId, id)} />
+      <DreamTripModal isOpen={showDreamTrip} onClose={() => setShowDreamTrip(false)} tripId={tripId} />
 
       {/* Floating Companion button */}
       <button

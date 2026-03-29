@@ -1035,6 +1035,31 @@ const de = {
   'collab.polls.options': 'Optionen',
   'collab.polls.delete': 'Löschen',
   'collab.polls.closedSection': 'Geschlossen',
+
+  // Briefing
+  'dreamTrip.title': 'Traumreise-Generator',
+  'dreamTrip.promptPlaceholder': 'Beschreiben Sie Ihre Traumreise... z.B. "Ein romantischer Wochenendtrip nach Paris mit gutem Essen und Wein"',
+  'dreamTrip.generate': 'Generieren',
+  'dreamTrip.generating': 'Ihre Traumreise wird generiert...',
+  'dreamTrip.noResults': 'Keine Ergebnisse gefunden. Versuchen Sie einen anderen Prompt.',
+  'dreamTrip.selectedCount': '{count} Orte ausgewählt',
+  'dreamTrip.acceptSelected': '{count} Orte akzeptieren',
+  'dreamTrip.discard': 'Verwerfen',
+  'dreamTrip.errors.emptyPrompt': 'Bitte beschreiben Sie Ihre Traumreise',
+  'dreamTrip.errors.noKey': 'Anthropic API-Schlüssel nicht konfiguriert. Fügen Sie ihn in den Admin-Einstellungen hinzu.',
+  'dreamTrip.errors.generationFailed': 'Reiseplan konnte nicht generiert werden',
+  'dreamTrip.errors.acceptFailed': 'Auswahl konnte nicht akzeptiert werden',
+  'dreamTrip.toast.accepted': '{count} Orte zu Ihrer Reise hinzugefügt!',
+
+  'briefing.title': 'Ihre Reise-Briefings',
+  'briefing.ready': 'Ihr Briefing für "{trip}" ist fertig!',
+  'briefing.view': 'Ansehen',
+  'briefing.flights': '{count} Flüge',
+  'briefing.hotels': '{count} Hotels',
+  'briefing.generated': 'Erstellt {time}',
+  'briefing.noBriefings': 'Keine ausstehenden Briefings',
+  'briefing.daysLeft': '{count} Tage bis zur Abreise',
+  'briefing.tomorrow': 'Morgen!',
 }
 
 export default de

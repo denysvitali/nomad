@@ -3,6 +3,8 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const { v4: uuidv4 } = require('uuid');
+const crypto = require('crypto');
+const bcrypt = require('bcryptjs');
 const { db, canAccessTrip, isOwner } = require('../db/database');
 const { authenticate, demoUploadBlock } = require('../middleware/auth');
 const { broadcast } = require('../websocket');
@@ -62,6 +64,254 @@ function generateDays(tripId, startDate, endDate) {
     insert.run(tripId, i + 1, d.toISOString().split('T')[0]);
   }
 }
+
+// GET /api/trips/live/:token — public live trip view (no auth required, session token auth)
+router.get('/live/:token', (req, res) => {
+  const { token } = req.params;
+
+  // Look up session
+  const session = db.prepare('SELECT * FROM trip_sessions WHERE token = ?').get(token);
+  if (!session) return res.status(404).json({ error: 'Session not found' });
+
+  // Check expiry
+  if (session.expires_at && new Date(session.expires_at) < new Date()) {
+    return res.status(410).json({ error: 'Session has expired' });
+  }
+
+  // Check password requirement — client must send ?password=... in query
+  if (session.password_hash) {
+    const password = req.query.password || req.headers['x-session-password'];
+    if (!password) {
+      return res.status(401).json({ error: 'Password required', requires_password: true });
+    }
+    const bcrypt = require('bcryptjs');
+    if (!bcrypt.compareSync(password, session.password_hash)) {
+      return res.status(401).json({ error: 'Invalid password' });
+    }
+  }
+
+  const tripId = session.trip_id;
+
+  // Fetch trip basic info
+  const tripData = db.prepare(`
+    SELECT id, title, start_date, end_date, cover_image as cover_url, description
+    FROM trips WHERE id = ?
+  `).get(tripId);
+
+  if (!tripData) return res.status(404).json({ error: 'Trip not found' });
+
+  // Fetch all days with assignments
+  const days = db.prepare(`
+    SELECT id, day_number, title, date
+    FROM days WHERE trip_id = ?
+    ORDER BY day_number ASC
+  `).all(tripId);
+
+  if (days.length === 0) {
+    return res.json({
+      trip: tripData,
+      days: [],
+      reservations: [],
+      accommodations: [],
+      collab: { messages: [], polls: [], notes: [] },
+    });
+  }
+
+  const dayIds = days.map(d => d.id);
+  const dayPlaceholders = dayIds.map(() => '?').join(',');
+
+  // Fetch all assignments for all days
+  const allAssignments = db.prepare(`
+    SELECT da.id, da.day_id, da.order_index, da.assignment_time, da.reservation_status, da.reservation_notes, da.reservation_datetime,
+      p.id as place_id, p.name as place_name, p.lat, p.lng,
+      p.address, p.category_id, p.place_time, p.end_time, p.description as place_description,
+      c.name as category_name, c.color as category_color, c.icon as category_icon
+    FROM day_assignments da
+    JOIN places p ON da.place_id = p.id
+    LEFT JOIN categories c ON p.category_id = c.id
+    WHERE da.day_id IN (${dayPlaceholders})
+    ORDER BY da.order_index ASC, da.created_at ASC
+  `).all(...dayIds);
+
+  // Group assignments by day_id
+  const assignmentsByDayId = {};
+  for (const a of allAssignments) {
+    if (!assignmentsByDayId[a.day_id]) assignmentsByDayId[a.day_id] = [];
+    assignmentsByDayId[a.day_id].push({
+      id: a.id,
+      order_index: a.order_index,
+      reservation_status: a.reservation_status,
+      reservation_notes: a.reservation_notes,
+      reservation_datetime: a.reservation_datetime,
+      place: {
+        id: a.place_id,
+        name: a.place_name,
+        lat: a.lat,
+        lng: a.lng,
+        address: a.address,
+        description: a.place_description,
+        category: a.category_id ? {
+          name: a.category_name,
+          color: a.category_color,
+          icon: a.category_icon,
+        } : null,
+        place_time: a.assignment_time || a.place_time,
+        end_time: a.end_time,
+      },
+    });
+  }
+
+  // Build days with assignments
+  const daysWithAssignments = days.map(day => ({
+    id: day.id,
+    day_number: day.day_number,
+    title: day.title,
+    date: day.date,
+    assignments: assignmentsByDayId[day.id] || [],
+  }));
+
+  // Fetch reservations
+  const reservations = db.prepare(`
+    SELECT id, type, title, status, flight_number, airline,
+      departure_airport, arrival_airport, reservation_time, confirmation_number,
+      location
+    FROM reservations
+    WHERE trip_id = ?
+    ORDER BY reservation_time ASC
+  `).all(tripId);
+
+  // Fetch accommodations
+  const accommodations = db.prepare(`
+    SELECT da.id, da.check_in, da.check_out,
+      p.name as place_name, p.address as place_address, p.lat, p.lng
+    FROM day_accommodations da
+    JOIN places p ON da.place_id = p.id
+    WHERE da.trip_id = ?
+    ORDER BY da.check_in ASC
+  `).all(tripId);
+
+  const formattedAccommodations = accommodations.map(a => ({
+    id: a.id,
+    check_in: a.check_in,
+    check_out: a.check_out,
+    place: {
+      name: a.place_name,
+      address: a.place_address,
+      lat: a.lat,
+      lng: a.lng,
+    },
+  }));
+
+  // Fetch collab messages
+  const messages = db.prepare(`
+    SELECT m.*, u.username, u.avatar,
+      rm.text AS reply_text, ru.username AS reply_username
+    FROM collab_messages m
+    JOIN users u ON m.user_id = u.id
+    LEFT JOIN collab_messages rm ON m.reply_to = rm.id
+    LEFT JOIN users ru ON rm.user_id = ru.id
+    WHERE m.trip_id = ? AND m.deleted = 0
+    ORDER BY m.id DESC
+    LIMIT 100
+  `).all(tripId);
+  messages.reverse();
+
+  // Batch-load reactions for messages
+  const msgIds = messages.map(m => m.id);
+  const reactionsByMsg = {};
+  if (msgIds.length > 0) {
+    const allReactions = db.prepare(`
+      SELECT r.message_id, r.emoji, r.user_id, u.username
+      FROM collab_message_reactions r
+      JOIN users u ON r.user_id = u.id
+      WHERE r.message_id IN (${msgIds.map(() => '?').join(',')})
+    `).all(...msgIds);
+    for (const r of allReactions) {
+      if (!reactionsByMsg[r.message_id]) reactionsByMsg[r.message_id] = [];
+      reactionsByMsg[r.message_id].push(r);
+    }
+  }
+
+  function groupReactions(reactions) {
+    const map = {};
+    for (const r of reactions) {
+      if (!map[r.emoji]) map[r.emoji] = [];
+      map[r.emoji].push({ user_id: r.user_id, username: r.username });
+    }
+    return Object.entries(map).map(([emoji, users]) => ({ emoji, users, count: users.length }));
+  }
+
+  function avatarUrl(user) {
+    return user?.avatar ? `/uploads/avatars/${user.avatar}` : null;
+  }
+
+  function formatMessage(msg) {
+    return {
+      ...msg,
+      avatar_url: avatarUrl(msg),
+      reactions: groupReactions(reactionsByMsg[msg.id] || []),
+    };
+  }
+
+  // Fetch collab polls
+  const pollRows = db.prepare('SELECT id FROM collab_polls WHERE trip_id = ? ORDER BY create_date DESC').all(tripId);
+
+  function getPollWithVotes(pollId) {
+    const poll = db.prepare(`
+      SELECT p.*, u.username, u.avatar
+      FROM collab_polls p
+      JOIN users u ON p.user_id = u.id
+      WHERE p.id = ?
+    `).get(pollId);
+    if (!poll) return null;
+    const options = JSON.parse(poll.options);
+    const votes = db.prepare(`
+      SELECT v.option_index, v.user_id, u.username, u.avatar
+      FROM collab_poll_votes v
+      JOIN users u ON v.user_id = u.id
+      WHERE v.poll_id = ?
+    `).all(pollId);
+    const formattedOptions = options.map((label, idx) => ({
+      label: typeof label === 'string' ? label : label.label || label,
+      voters: votes.filter(v => v.option_index === idx).map(v => ({ id: v.user_id, username: v.username, avatar: v.avatar, avatar_url: avatarUrl(v) })),
+    }));
+    return {
+      ...poll,
+      avatar_url: avatarUrl(poll),
+      options: formattedOptions,
+      is_closed: !!poll.closed,
+      multiple_choice: !!poll.multiple,
+    };
+  }
+
+  const polls = pollRows.map(row => getPollWithVotes(row.id)).filter(Boolean);
+
+  // Fetch collab notes
+  const notes = db.prepare(`
+    SELECT n.*, u.username, u.avatar
+    FROM collab_notes n
+    JOIN users u ON n.user_id = u.id
+    WHERE n.trip_id = ?
+    ORDER BY n.pinned DESC, n.updated_at DESC
+  `).all(tripId);
+
+  const formattedNotes = notes.map(note => ({
+    ...note,
+    avatar_url: avatarUrl(note),
+  }));
+
+  res.json({
+    trip: tripData,
+    days: daysWithAssignments,
+    reservations,
+    accommodations: formattedAccommodations,
+    collab: {
+      messages: messages.map(formatMessage),
+      polls,
+      notes: formattedNotes,
+    },
+  });
+});
 
 // GET /api/trips — active or archived, includes shared trips
 router.get('/', authenticate, (req, res) => {
@@ -243,6 +493,79 @@ router.delete('/:id/members/:userId', authenticate, (req, res) => {
 
   db.prepare('DELETE FROM trip_members WHERE trip_id = ? AND user_id = ?').run(req.params.id, targetId);
   res.json({ success: true });
+});
+
+// ─── Shareable Trip Sessions ─────────────────────────────────────────────────
+
+// POST /api/trips/:id/share — create a shareable session
+router.post('/:id/share', authenticate, (req, res) => {
+  if (!canAccessTrip(req.params.id, req.user.id))
+    return res.status(404).json({ error: 'Trip not found' });
+
+  const trip = db.prepare('SELECT id FROM trips WHERE id = ?').get(req.params.id);
+  if (!trip) return res.status(404).json({ error: 'Trip not found' });
+
+  const { password, expires_in_days } = req.body;
+
+  // Generate unique token
+  const token = crypto.randomUUID();
+
+  // Hash password if provided
+  let passwordHash = null;
+  if (password) {
+    passwordHash = bcrypt.hashSync(password, 10);
+  }
+
+  // Calculate expiry date
+  let expiresAt = null;
+  if (expires_in_days) {
+    const expiryDate = new Date();
+    expiryDate.setDate(expiryDate.getDate() + expires_in_days);
+    expiresAt = expiryDate.toISOString();
+  }
+
+  // Delete any existing sessions for this trip
+  db.prepare('DELETE FROM trip_sessions WHERE trip_id = ?').run(req.params.id);
+
+  // Create new session
+  const result = db.prepare(`
+    INSERT INTO trip_sessions (trip_id, token, password_hash, created_by, expires_at)
+    VALUES (?, ?, ?, ?, ?)
+  `).run(req.params.id, token, passwordHash, req.user.id, expiresAt);
+
+  const session = db.prepare('SELECT * FROM trip_sessions WHERE id = ?').get(result.lastInsertRowid);
+
+  res.status(201).json({
+    url: `/trip/${req.params.id}-${token}/live`,
+    token,
+    expires_at: session.expires_at,
+    has_password: !!passwordHash,
+  });
+});
+
+// DELETE /api/trips/:id/share — revoke all shareable sessions
+router.delete('/:id/share', authenticate, (req, res) => {
+  if (!canAccessTrip(req.params.id, req.user.id))
+    return res.status(404).json({ error: 'Trip not found' });
+
+  db.prepare('DELETE FROM trip_sessions WHERE trip_id = ?').run(req.params.id);
+  res.json({ success: true });
+});
+
+// GET /api/trips/:id/sessions — list all shareable sessions
+router.get('/:id/sessions', authenticate, (req, res) => {
+  if (!canAccessTrip(req.params.id, req.user.id))
+    return res.status(404).json({ error: 'Trip not found' });
+
+  const sessions = db.prepare(`
+    SELECT id, token, created_at, expires_at,
+      CASE WHEN password_hash IS NOT NULL THEN 1 ELSE 0 END as has_password
+    FROM trip_sessions
+    WHERE trip_id = ?
+    ORDER BY created_at DESC
+  `).all(req.params.id);
+
+  res.json({ sessions });
 });
 
 module.exports = router;
